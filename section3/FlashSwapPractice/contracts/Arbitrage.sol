@@ -5,6 +5,7 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IUniswapV2Pair } from "v2-core/interfaces/IUniswapV2Pair.sol";
 import { IUniswapV2Callee } from "v2-core/interfaces/IUniswapV2Callee.sol";
+import { IUniswapV2Router01 } from "v2-periphery/interfaces/IUniswapV2Router01.sol";
 
 // This is a pracitce contract for flash swap arbitrage
 contract Arbitrage is IUniswapV2Callee, Ownable {
@@ -40,8 +41,12 @@ contract Arbitrage is IUniswapV2Callee, Ownable {
         require(amount0 > 0 || amount1 > 0, "amount0 or amount1 must be greater than 0");
 
         // 3. decode callback data
+        CallbackData memory callback = abi.decode(data, (CallbackData));
         // 4. swap WETH to USDC
+        IERC20(callback.borrowToken).transfer(callback.targetSwapPool, callback.borrowAmount);
+        IUniswapV2Pair(callback.targetSwapPool).swap(0, callback.debtAmountOut, address(this), new bytes(0));
         // 5. repay USDC to lower price pool
+        require(IERC20(callback.debtToken).transfer(callback.borrowPool, callback.debtAmount), "Repay failed");
     }
 
     // Method 1 is
@@ -55,10 +60,21 @@ contract Arbitrage is IUniswapV2Callee, Ownable {
     // for testing convenient, we implement the method 1 here
     function arbitrage(address priceLowerPool, address priceHigherPool, uint256 borrowETH) external {
         // 1. finish callbackData
+        CallbackData memory callbackData;
+        callbackData.borrowPool = priceLowerPool;
+        callbackData.targetSwapPool = priceHigherPool;
+        IUniswapV2Pair pair0 = IUniswapV2Pair(priceLowerPool);
+        callbackData.borrowToken = pair0.token0();
+        callbackData.debtToken = pair0.token1();
+        callbackData.borrowAmount = borrowETH;
+        (uint112 reserveETH, uint112 reserveUSDC, ) = pair0.getReserves();
+        callbackData.debtAmount = _getAmountIn(borrowETH, uint256(reserveUSDC), uint256(reserveETH));
+        (uint112 reserveIn, uint112 reserveOut, ) = IUniswapV2Pair(priceHigherPool).getReserves();
+        callbackData.debtAmountOut = _getAmountOut(borrowETH, uint256(reserveIn), uint256(reserveOut));
         // 2. flash swap (borrow WETH from lower price pool)
 
         // Uncomment next line when you do the homework
-        // IUniswapV2Pair(priceLowerPool).swap(borrowETH, 0, address(this), abi.encode(callbackData));
+        IUniswapV2Pair(priceLowerPool).swap(borrowETH, 0, address(this), abi.encode(callbackData));
     }
 
     //
